@@ -157,7 +157,7 @@ int main() {
                 break;
             }
 
-            csvCPU << i + 1 << "," << std::to_string(series_number)  + "-" + std::to_string(i) << "," 
+            csvCPU << i + 1 << "," << std::to_string(series_number)  + "-" + std::to_string(i + 1) << "," 
             << dx * pixel_size << "," << dx << "," 
             << dy * pixel_size << "," << dy << ","
             << std::to_string(series_number) << ","
@@ -262,6 +262,44 @@ int main() {
 
     std::cout << "GPU matching elapsed time: " << tm.getTimeSec() << " sec" << std::endl;
     std::cout << "GPU FPS: " << (imgNum * templtNum)/ tm.getTimeSec() << " FPS" << std::endl;
+
+
+    for(int t = 0; t < templtNum; ++t){
+        std::cout << "Writing GPU results for template " << t + 1 << std::endl;
+
+        std::string csvGPUName = "results_csv/resultsGPU_" + std::to_string(t + 1) + ".csv";
+        std::ofstream csvGPU(csvGPUName);
+        // csvCPU << "index,x [px],y [px],confidence\n";
+        csvGPU << "index,frame_index,dx [nm],dx [px],dy [nm],dy [px],series,descriptor,descriptor_2,confidence,p_x,p_y\n";
+
+        for (int i = 0; i < imgNum; ++i) {
+
+
+            double dx = maxLoc_gpu[t][0].x - maxLoc_gpu[t][i].x ;
+            double dy = maxLoc_gpu[t][0].y - maxLoc_gpu[t][i].y ;
+
+            if (maxVal_gpu[t][i] < threshold){
+
+                std::cout << "Threshold limiter "<< maxVal_gpu[t][i] << std::endl;
+                break;
+            }
+
+            csvGPU << i + 1 << "," << std::to_string(series_number)  + "-" + std::to_string(i + 1) << "," 
+            << dx * pixel_size << "," << dx << "," 
+            << dy * pixel_size << "," << dy << ","
+            << std::to_string(series_number) << ","
+            <<"S:" + std::to_string(series_number) + " - T:" + std::to_string(t + 1) + " - IMG:" + std::to_string(i + 1) << ","
+            <<"S:" + std::to_string(series_number) + " - IMG:" + std::to_string(i + 1) << ","
+            <<std::setprecision(5) << std::fixed << maxVal_gpu[t][i] << "," 
+            << maxLoc_gpu[t][i].x <<","
+            << maxLoc_gpu[t][i].y <<"\n";
+            
+        }
+        csvGPU.close();
+    }
+
+
+
 
 
 
