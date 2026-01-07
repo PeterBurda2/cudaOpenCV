@@ -41,7 +41,7 @@ int main() {
 
 
     std::vector<cv::Mat> imgSeries(imgNum);
-    cv::Mat templateTrack = cv::imread("templates/t_1.tif", cv::IMREAD_UNCHANGED);
+    cv::Mat templateTrack = cv::imread("templates/template_1.tiff", cv::IMREAD_UNCHANGED);
     cv::GaussianBlur(templateTrack, templateTrack, ksize, sigma);
 
 
@@ -49,7 +49,7 @@ int main() {
     #pragma omp parallel for schedule(dynamic, 1)
     for (int i = 0; i < imgNum; ++i) {
 
-        std::string frameName = "series_1/frame_" + std::to_string(i) + ".tif";
+        std::string frameName = "series_1/img_1_" + std::to_string(i + 1) + ".tiff";
         cv::Mat img = cv::imread(frameName, cv::IMREAD_UNCHANGED);
 
         cv::GaussianBlur(img, img, ksize, sigma);
@@ -61,6 +61,7 @@ int main() {
     std::cout << "Load Time: " << tm.getTimeSec() << std::endl;
     const int H = imgSeries[0].rows;
     const int W = imgSeries[0].cols;
+
     const int h = templateTrack.rows;
     const int w = templateTrack.cols;
 
@@ -107,7 +108,8 @@ int main() {
         maxLoc_cpu[i] = maxP;
     }
 
-
+    tm.stop();
+ 
     std::ofstream csvCPU("results_csv/resultsCPU.csv");
     csvCPU << "iter,x [px],y [px],confidence\n";
 
@@ -117,7 +119,6 @@ int main() {
     }
     csvCPU.close();
 
-    tm.stop();
 
     std::cout << "CPU matching elapsed time: " << tm.getTimeSec()<< " sec" << std::endl;
     std::cout << "CPU FPS: " << imgNum /tm.getTimeSec() << " FPS" << std::endl;
@@ -135,42 +136,81 @@ int main() {
     cv::Ptr<cv::cuda::TemplateMatching> matcher =
         cv::cuda::createTemplateMatching(CV_8UC1, method);
     
-    double minValGPU = 0.0, maxValGPU = 0.0;
-    cv::Point minLocGPU, maxLocGPU;
 
     const int resW = W - w + 1;
     const int resH = H - h + 1;
 
+    // double minValGPU = 0.0, maxValGPU = 0.0;
+    // cv::Point minLocGPU, maxLocGPU;
 
-    const int K = 32;  // ring size (8..32 typical)
-    std::vector<cv::cuda::HostMem> h_ring(K);
-    std::vector<cv::Mat> ring(K);
+    // const int K = 64;  // ring size (8..32 typical)
+    // std::vector<cv::cuda::HostMem> h_ring(K);
+    // std::vector<cv::Mat> ring(K);
+    // // std::vector<cv::cuda::GpuMat> d_res(imgNum);
+    // for (int k = 0; k < K; ++k) {
+    //     h_ring[k] = cv::cuda::HostMem(H, W, imgSeries[0].type(), cv::cuda::HostMem::PAGE_LOCKED);
+    //     ring[k] = h_ring[k].createMatHeader();
+    // }
 
 
-    for (int k = 0; k < K; ++k) {
-        h_ring[k] = cv::cuda::HostMem(H, W, imgSeries[0].type(), cv::cuda::HostMem::PAGE_LOCKED);
-        ring[k] = h_ring[k].createMatHeader();
-    }
-
-    cv::cuda::GpuMat d_img, d_templ, d_res;
-
+    std::vector<cv::cuda::HostMem> h_series(imgNum);
+    std::vector<cv::Mat> seriesPinned(imgNum);
 
     for (int i = 0; i < imgNum; ++i) {
-        int k = i % K;
-        std::cout << "k: " << k << std::endl;
+        h_series[i] = cv::cuda::HostMem(H, W, imgSeries[i].type(), cv::cuda::HostMem::PAGE_LOCKED);
+        seriesPinned[i] = h_series[i].createMatHeader();
+        imgSeries[i].copyTo(seriesPinned[i]);   // one-time copy (NOT inside tracking loop)
+    }
 
-        // // pageable -> pinned
-        imgSeries[i].copyTo(ring[k]);
+    // optional: free pageable copies to save RAM
+    imgSeries.clear();
+    imgSeries.shrink_to_fit();
+
+
+    std::vector<double> maxVal_gpu(imgNum);
+    std::vector<cv::Point> maxLoc_gpu(imgNum);
+
+    cv::cuda::GpuMat d_img, d_templ, d_res;
+    
+    d_img.create(H, W, CV_8UC1);
+    d_templ.create(h, w, CV_8UC1);
+    d_res.create(resH, resW, CV_32FC1);
+
+    d_templ.upload(templateTrack, stream);
+
+    tm.reset();
+
+    tm.start();
+    for (int i = 0; i < imgNum; ++i) {
 
         // // pinned -> device (fast / async-capable)
-        d_img.upload(ring[k], stream);
+        d_img.upload(seriesPinned[i], stream);
 
         matcher->match(d_img, d_templ, d_res, stream);
         stream.waitForCompletion(); // simplest; for real overlap use events (see below)
+        
+        double minV, maxV;
+        cv::Point minP, maxP;
 
-        // cv::cuda::minMaxLoc(d_res, &minValGPU, &maxValGPU, &minLocGPU, &maxLocGPU);
-
+        cv::cuda::minMaxLoc(d_res, &minV, &maxV, &minP, &maxP);
+        maxVal_gpu[i] = maxV;
+        maxLoc_gpu[i] = maxP;
     }
+    tm.stop();
+
+
+    std::ofstream csvGPU("results_csv/resultsGPU.csv");
+    csvGPU << "iter,x [px],y [px],confidence\n";
+
+    for(int i = 0; i < imgNum; i++){
+
+        csvGPU <<  i << "," << maxLoc_gpu[i].x << "," << maxLoc_gpu[i].y << "," << std::setprecision(4) << std::fixed << maxVal_gpu[i] << "\n";
+    }
+
+    csvGPU.close();
+
+    std::cout << "GPU matching elapsed time: " << tm.getTimeSec() << " sec" << std::endl;
+    std::cout << "GPU FPS: " << imgNum /tm.getTimeSec() << " FPS" << std::endl;
 
 
     // ---- Pinned host memory (HostMem) ----
